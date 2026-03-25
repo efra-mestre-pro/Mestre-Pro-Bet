@@ -1,55 +1,55 @@
-const admin = require("firebase-admin");
-const fetch = require("node-fetch");
+const admin = require('firebase-admin');
+const axios = require('axios');
 
-const TIMEZONE = "Africa/Maputo";
+// 1. Pega a chave de serviço que você salvou nos Secrets do GitHub
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-function getMaputoDate() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: TIMEZONE })).toISOString().split("T")[0];
+// 2. Inicializa o Firebase apontando para o Realtime Database (O banco que o seu Blogger lê)
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: "https://bet-pro-41f35-default-rtdb.firebaseio.com/"
+  });
 }
 
-function initFirebase() {
+const db = admin.database();
+
+async function buscarEEnviar() {
   try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG.trim());
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-    if (!admin.apps.length) {
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-    }
-  } catch (err) {
-    console.error("Erro Firebase:", err.message);
+    console.log('🛰️ Conectando à API de esportes...');
+    
+    // SUBSTITUA ABAIXO PELA SUA URL DE API E TOKEN REAL
+    const response = await axios.get('SUA_URL_DA_API_AQUI', {
+      headers: { 'X-Auth-Token': 'SEU_TOKEN_AQUI' } 
+    });
+
+    const jogosApi = response.data.matches || response.data; // Ajuste conforme o formato da sua API
+    const listaParaFirebase = {};
+
+    console.log(`⚽ Processando ${jogosApi.length} jogos...`);
+
+    // 3. Mapeia os dados da API para os nomes que seu site no Blogger entende
+    jogosApi.forEach((jogo, index) => {
+      // Ajuste os nomes (ex: jogo.homeTeam.name) conforme a sua API envia
+      listaParaFirebase[`jogo_${index}`] = {
+        equipeA: jogo.homeTeam?.name || jogo.team_home || 'Time A',
+        equipeB: jogo.awayTeam?.name || jogo.team_away || 'Time B',
+        liga: jogo.competition?.name || jogo.league || 'Liga Pro',
+        odds: jogo.odds?.msg || '1.80',
+        placar: jogo.score?.fullTime?.home !== undefined ? `${jogo.score.fullTime.home} x ${jogo.score.fullTime.away}` : 'vs',
+        hora: jogo.utcDate ? new Date(jogo.utcDate).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'}) : '--:--'
+      };
+    });
+
+    // 4. Limpa o banco e insere os novos dados no nó 'jogos'
+    await db.ref('jogos').set(listaParaFirebase);
+
+    console.log('✅ Bet Pro sincronizado com sucesso no Realtime Database!');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Erro na operação:', error.message);
     process.exit(1);
   }
 }
 
-initFirebase();
-const db = admin.firestore();
-const API_KEY = process.env.API_FOOTBALL_KEY;
-
-async function executar() {
-  const hoje = getMaputoDate();
-  const url = `https://v3.football.api-sports.io/fixtures?date=${hoje}`;
-
-  try {
-    const res = await fetch(url, { headers: { "x-apisports-key": API_KEY } });
-    const json = await res.json();
-    const jogos = json.response || [];
-
-    const dadosProcessados = jogos.map(j => ({
-      liga: { nome: j.league.name, logo: j.league.logo },
-      casa: { nome: j.teams.home.name, logo: j.teams.home.logo },
-      fora: { nome: j.teams.away.name, logo: j.teams.away.logo },
-      status: j.fixture.status.short,
-      resultado: j.score.fulltime
-    }));
-
-    await db.collection("central_esportes").doc("dashboard_hoje").set({
-      jogos: dadosProcessados,
-      atualizadoEm: new Date().toISOString()
-    });
-
-    console.log("✅ Dados atualizados com logos!");
-  } catch (err) {
-    console.error("Erro:", err.message);
-  }
-}
-
-executar();
+buscarEEnviar();
